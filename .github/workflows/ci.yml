@@ -1,0 +1,38 @@
+name: CI
+
+# e2e.yml checks that a push from remain's App starts this on the pull request, which a push with
+# GITHUB_TOKEN wouldn't. So it has to run for pull requests into any branch, not just main.
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: zizmor@1.31.1,shellcheck@0.11.0
+      # install-action doesn't carry actionlint. go install checks it against Go's checksum database.
+      - run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: actionlint
+      # zizmor runs its online audits (impostor commits, known-vulnerable actions) with a token.
+      - run: zizmor .
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: shellcheck tools/*.sh

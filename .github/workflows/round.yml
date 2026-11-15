@@ -1,0 +1,154 @@
+name: remain round
+
+# One scheduled run of remain, as its README's caller workflow has it, but with the remain under
+# test checked out at `ref` and the e2e run's own base. e2e.yml calls it once per stack level.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The cutenode/remain commit to run
+        required: true
+        type: string
+      round:
+        description: Tells this round's artifacts and cache apart from the other's
+        required: true
+        type: number
+      wait-for:
+        description: tools/wait.sh's specs to wait on first, space-separated
+        default: ''
+        type: string
+
+permissions: {}
+
+jobs:
+  # The pull requests whose merge needs files rebuilt. Runs none of the repository's code.
+  list:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pulls: ${{ steps.remain.outputs.pulls }}
+    steps:
+      # All of history, since remain merges and learns resolutions from it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # GitHub works out mergeability in the background, so the last round's push can still read
+      # as the old state.
+      - if: inputs.wait-for != ''
+        run: |
+          read -ra specs <<< "$WAIT_FOR"
+          tools/wait.sh "${specs[@]}"
+        env:
+          WAIT_FOR: ${{ inputs.wait-for }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: cutenode/remain
+          ref: ${{ inputs.ref }}
+          path: remain
+          persist-credentials: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .git/rr-cache
+          key: remain-rerere-${{ github.run_id }}-${{ inputs.round }}
+          restore-keys: remain-rerere-
+      - id: remain
+        uses: ./remain
+        with:
+          mode: list
+          base: e2e/${{ github.run_id }}/main
+
+  # Rebuilds one pull request's files with its regen commands, which run its code. No secrets here.
+  merge:
+    needs: list
+    if: needs.list.outputs.pulls != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        pull: ${{ fromJSON(needs.list.outputs.pulls) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: cutenode/remain
+          ref: ${{ inputs.ref }}
+          path: remain
+          persist-credentials: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .git/rr-cache
+          key: remain-rerere-${{ github.run_id }}-${{ inputs.round }}
+          restore-keys: remain-rerere-
+      - uses: ./remain
+        with:
+          mode: merge
+          pull: ${{ matrix.pull }}
+          base: e2e/${{ github.run_id }}/main
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: remain-plans-${{ inputs.round }}-${{ matrix.pull }}
+          path: remain-plans
+          retention-days: 1
+
+  # Checks the merge jobs' work without running any of the repository's code, then pushes. It
+  # restores no cache, since a merge job could have written one.
+  push:
+    needs: [list, merge]
+    if: ${{ !cancelled() && needs.list.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: remain
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: cutenode/remain
+          ref: ${{ inputs.ref }}
+          path: remain
+          persist-credentials: false
+      - if: needs.list.outputs.pulls != '[]'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: remain-plans-${{ inputs.round }}-*
+          path: remain-plans
+          merge-multiple: true
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.REMAIN_CLIENT_ID }}
+          private-key: ${{ secrets.REMAIN_PRIVATE_KEY }}
+          permission-contents: write
+          permission-workflows: write
+      - uses: ./remain
+        with:
+          mode: push
+          app-token: ${{ steps.app.outputs.token }}
+          app-slug: ${{ steps.app.outputs.app-slug }}
+          base: e2e/${{ github.run_id }}/main
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .git/rr-cache
+          key: remain-rerere-push-${{ github.run_id }}-${{ inputs.round }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: remain-digest-${{ inputs.round }}
+          path: remain-digest

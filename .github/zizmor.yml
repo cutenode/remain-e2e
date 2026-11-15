@@ -1,0 +1,6 @@
+rules:
+  # `uses: $/` is the fix for the call to round.yml, but actionlint rejects it until
+  # https://github.com/rhysd/actionlint/issues/711 lands. `./remain` is a checkout of cutenode/remain,
+  # not this repository, so `$/` would point at the wrong thing there.
+  self-repository:
+    disable: true

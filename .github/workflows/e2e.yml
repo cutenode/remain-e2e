@@ -1,0 +1,106 @@
+name: e2e
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: The cutenode/remain commit SHA to test
+        required: true
+        type: string
+      require-verified:
+        description: Fail when remain's merge commits aren't signed
+        type: boolean
+        default: false
+
+permissions: {}
+
+# Each run works on its own base branch, but remain reads every open pull request in the
+# repository and shares the rerere cache, so runs go one at a time.
+concurrency:
+  group: e2e
+
+jobs:
+  # The pull requests remain runs against, on branches under e2e/<run id>/.
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      fixtures: ${{ steps.fixtures.outputs.fixtures }}
+    steps:
+      # tools/fixtures.sh sends the token in a header for each push instead.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: fixtures
+        run: tools/fixtures.sh
+        env:
+          RUN_ID: ${{ github.run_id }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+
+  # Merges the base into every conflicting pull request based on it, the stack's parent included.
+  round1:
+    needs: fixtures
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/round.yml
+    with:
+      ref: ${{ inputs.ref }}
+      round: 1
+
+  # The child waits while its parent conflicts, so it's only merged once the parent has the base.
+  round2:
+    needs: [fixtures, round1]
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/round.yml
+    with:
+      ref: ${{ inputs.ref }}
+      round: 2
+      wait-for: >-
+        ${{ fromJSON(needs.fixtures.outputs.fixtures).parent }}!=UNKNOWN
+        ${{ fromJSON(needs.fixtures.outputs.fixtures).parent }}!=DIRTY
+        ${{ fromJSON(needs.fixtures.outputs.fixtures).child }}=DIRTY
+
+  assert:
+    needs: [fixtures, round2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tools/assert.sh
+        env:
+          FIXTURES: ${{ needs.fixtures.outputs.fixtures }}
+          REQUIRE_VERIFIED: ${{ inputs.require-verified }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+
+  # Runs whatever happened before, so a failed run doesn't leave pull requests open.
+  cleanup:
+    if: always()
+    needs: assert
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tools/cleanup.sh
+        env:
+          RUN_ID: ${{ github.run_id }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}

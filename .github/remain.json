@@ -1,0 +1,10 @@
+{
+	"rules": [
+		{ "cause": "list", "paths": ["list.txt"], "union": true },
+		{ "cause": "generated index", "paths": ["items.index"], "regen": "ls items | sort > items.index" },
+		{ "cause": "committed numbers", "paths": ["budgets/**"] }
+	],
+	"approvers": [],
+	"since": "30 days ago",
+	"label": "needs-owner"
+}
