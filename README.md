@@ -7,7 +7,7 @@ End-to-end tests for [remain](https://github.com/cutenode/remain) against real G
 `e2e.yml` takes the remain commit to test and:
 
 1. Makes a base branch `e2e/<run id>/main` from main and opens pull requests into it, one per case: a union list (`list.txt`), a regenerated file (`items.index`), a code conflict (`code.txt`), a file a rule names without a fix (`budgets/size.json`), a stack of two, and a clean one. Then it moves the base so all but the clean one and the stack's child conflict.
-2. Runs remain's merge and push jobs twice (`round.yml`): the first round merges the base in, the second merges the stack's parent into its child.
+2. Runs remain twice: the first round merges the base in, the second merges the stack's parent into its child. By default each round runs the action at `ref` (`round.yml`); with `via=workflow` it calls remain's reusable workflow on main instead, as a caller would.
 3. Checks the results with `tools/assert.sh`: the merge commits and their contents, whether GitHub verified them, the `needs-owner` label and comment, the clean pull request left alone, and that the App's push started `ci` on the pull request.
 4. Closes the pull requests and deletes the run's branches, pass or fail.
 
@@ -17,7 +17,7 @@ End-to-end tests for [remain](https://github.com/cutenode/remain) against real G
 gh workflow run e2e.yml -R cutenode/remain-e2e -f ref=<remain commit sha>
 ```
 
-Add `-f require-verified=true` to fail when the merge commits aren't signed. By default it only warns.
+Add `-f require-verified=true` to fail when the merge commits aren't signed. By default it only warns. `-f via=workflow` tests the reusable workflow on remain's main and ignores `ref`.
 
 ## What it needs
 

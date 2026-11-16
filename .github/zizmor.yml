@@ -4,3 +4,8 @@ rules:
   # not this repository, so `$/` would point at the wrong thing there.
   self-repository:
     disable: true
+  # e2e.yml's workflow path runs remain's reusable workflow as callers get it once it's on main.
+  unpinned-uses:
+    config:
+      policies:
+        cutenode/remain/*: ref-pin
