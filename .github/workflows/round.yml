@@ -13,10 +13,10 @@ on:
         description: Tells this round's artifacts and cache apart from the other's
         required: true
         type: number
-      wait-for:
-        description: tools/wait.sh's specs to wait on first, space-separated
-        default: ''
-        type: string
+    secrets:
+      REMAIN_PRIVATE_KEY:
+        description: The App's private key. Pass it even though it lives in the `remain` environment, or it arrives empty
+        required: true
 
 permissions: {}
 
@@ -36,16 +36,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # GitHub works out mergeability in the background, so the last round's push can still read
-      # as the old state.
-      - if: inputs.wait-for != ''
-        run: |
-          read -ra specs <<< "$WAIT_FOR"
-          tools/wait.sh "${specs[@]}"
-        env:
-          WAIT_FOR: ${{ inputs.wait-for }}
-          GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: cutenode/remain

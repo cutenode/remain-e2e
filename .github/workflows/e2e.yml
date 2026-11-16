@@ -3,9 +3,14 @@ name: e2e
 on:
   workflow_dispatch:
     inputs:
+      via:
+        description: Run remain through its action at `ref`, or through its reusable workflow on main
+        type: choice
+        options: [action, workflow]
+        default: action
       ref:
-        description: The cutenode/remain commit SHA to test
-        required: true
+        description: 'The cutenode/remain commit SHA to test through the action [default: main]'
+        default: ''
         type: string
       require-verified:
         description: Fail when remain's merge commits aren't signed
@@ -42,8 +47,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
   # Merges the base into every conflicting pull request based on it, the stack's parent included.
+  # One of each pair runs, as `via` says.
   round1:
     needs: fixtures
+    if: inputs.via == 'action'
     permissions:
       contents: read
       pull-requests: write
@@ -51,10 +58,43 @@ jobs:
     with:
       ref: ${{ inputs.ref }}
       round: 1
+    secrets:
+      REMAIN_PRIVATE_KEY: ${{ secrets.REMAIN_PRIVATE_KEY }}
+  round1-workflow:
+    needs: fixtures
+    if: inputs.via == 'workflow'
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: cutenode/remain/.github/workflows/remain.yml@main
+    with:
+      base: e2e/${{ github.run_id }}/main
+    secrets:
+      REMAIN_PRIVATE_KEY: ${{ secrets.REMAIN_PRIVATE_KEY }}
 
-  # The child waits while its parent conflicts, so it's only merged once the parent has the base.
+  # GitHub works out mergeability in the background, so the first round's push can still read as
+  # the old state. The child waits while its parent conflicts, so it's only merged in round two.
+  between:
+    needs: [fixtures, round1, round1-workflow]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tools/wait.sh "${PARENT}!=UNKNOWN" "${PARENT}!=DIRTY" "${CHILD}=DIRTY"
+        env:
+          PARENT: ${{ fromJSON(needs.fixtures.outputs.fixtures).parent }}
+          CHILD: ${{ fromJSON(needs.fixtures.outputs.fixtures).child }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+
   round2:
-    needs: [fixtures, round1]
+    needs: between
+    if: inputs.via == 'action'
     permissions:
       contents: read
       pull-requests: write
@@ -62,13 +102,23 @@ jobs:
     with:
       ref: ${{ inputs.ref }}
       round: 2
-      wait-for: >-
-        ${{ fromJSON(needs.fixtures.outputs.fixtures).parent }}!=UNKNOWN
-        ${{ fromJSON(needs.fixtures.outputs.fixtures).parent }}!=DIRTY
-        ${{ fromJSON(needs.fixtures.outputs.fixtures).child }}=DIRTY
+    secrets:
+      REMAIN_PRIVATE_KEY: ${{ secrets.REMAIN_PRIVATE_KEY }}
+  round2-workflow:
+    needs: between
+    if: inputs.via == 'workflow'
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: cutenode/remain/.github/workflows/remain.yml@main
+    with:
+      base: e2e/${{ github.run_id }}/main
+    secrets:
+      REMAIN_PRIVATE_KEY: ${{ secrets.REMAIN_PRIVATE_KEY }}
 
   assert:
-    needs: [fixtures, round2]
+    needs: [fixtures, round2, round2-workflow]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
